@@ -1464,7 +1464,7 @@ class CCFS3000Helper(object):
         out_fp.seek(output_offset)
 
         # Write diff data
-        err, diff_map = self.client.get_thin_dump_diff(ts_lun['Name'], fs_lun['Id'])
+        err, diff_map = self.client.get_thin_dump_diff(fs_lun['Id'], ts_lun['Id'])
         if (diff_map is None):
             print "There's no diff between", fs_lun['Name'], ts_lun['Name']
             # Write end
