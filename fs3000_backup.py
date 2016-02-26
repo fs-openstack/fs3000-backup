@@ -16,8 +16,8 @@
 #    Depends on: python-nova: 1:2014.2.4-0ubuntu1~cloud4; lsscsi: 0.27-2
 
 # For user area
-STORAGE_MASTER_IP = '172.16.11.112'
-STORAGE_SLAVE_IP = '172.16.11.111'
+STORAGE_MASTER_IP = '172.16.240.25'
+STORAGE_SLAVE_IP = '172.16.240.27'
 STORAGE_USERNAME = 'admin'
 STORAGE_PASSWORD = ''
 
@@ -37,8 +37,8 @@ import struct
 from nova.virt.libvirt import utils as libvirt_utils
 from nova.storage import linuxscsi
 
-HTTP_DEBUG=0
-CMD_DEBUG=0
+HTTP_DEBUG=1
+CMD_DEBUG=1
 VERSION = '00.00.01'
 GiB = 1024 * 1024 * 1024
 ENABLE_TRACE = False
@@ -466,7 +466,7 @@ class CCFS3000RESTClient(object):
                             'action' : 'createFCLunMapping',
                             'lvId' : lun_id,
                             'lunNumber' : host_lun,
-                            'wwn' : initiator}
+                            'wwn' : initiator.upper()}
             elif protocol == 'iSCSI':
                 url_para = {'service' : 'LunMappingService',
                             'action' : 'createLunMappingWithChapUser',
@@ -583,7 +583,7 @@ class CCFS3000Helper(object):
              'vendor_name': 'Fortunet',
              'volume_backend_name': None}
     wwpn = []
-    wwpn.append(libvirt_utils.get_fc_wwpns().pop())
+    wwpn.append(libvirt_utils.get_fc_wwpns().pop().upper())
     iscsi_initiator = []
     iscsi_initiator.append(libvirt_utils.get_iscsi_initiator())
     connector = {'initiator': iscsi_initiator,
@@ -1171,7 +1171,6 @@ class CCFS3000Helper(object):
     def rescan_host(self):
         hbas = libvirt_utils.get_fc_hbas_info()
         linuxscsi.rescan_hosts(hbas)
-        pass
 
     def attach_volume(self, conn_info):
        	if (conn_info['driver_volume_type'] == 'iscsi'):
@@ -1179,7 +1178,6 @@ class CCFS3000Helper(object):
        	elif (conn_info['driver_volume_type'] == 'fibre_channel'):
        	     self.rescan_host()
         time.sleep(1)
-        pass
 
     def initialize_connection(self, lun_id, connector):
         err, lun_data = self.client.get_lun_by_id(lun_id)
@@ -1199,7 +1197,6 @@ class CCFS3000Helper(object):
 	process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
 	outputs, error = process.communicate() 
         return outputs, error
-        pass
 
     def attach_iscsi(self, conn_info, ip):
         command = 'sudo /usr/bin/iscsiadm -m node -p %s:3260 -l 2>&1 1>/dev/null' % ip
@@ -1246,11 +1243,12 @@ class CCFS3000Helper(object):
             return
         else:
             for output in outputs.splitlines():
+                print output
                 words = output.split( )
                 acsl = words[0][1:-1]
                 disktype = words[1]
                 transport = words[2]
-                path = words[3]
+                path = words[3] if (len(words) == 4) else ""
 
                 lun_no = acsl.split(':')[3]
                 if (proto == 'iSCSI'):
@@ -1285,7 +1283,6 @@ class CCFS3000Helper(object):
 
     def remove_device(self, device):
         linuxscsi.remove_device(linuxscsi.get_device_info(device))
-        pass
 
     def terminate_connection(self, lun_id, connector, conn_info, device):
         if self.storage_protocol == 'FC':
@@ -1466,7 +1463,9 @@ class CCFS3000Helper(object):
         # Write diff data
         err, diff_map = self.client.get_thin_dump_diff(fs_lun['Id'], ts_lun['Id'])
         if (diff_map is None):
-            print "There's no diff between", fs_lun['Name'], ts_lun['Name']
+            if (CMD_DEBUG == 1):
+                print "There's no diff between", fs_lun['Name'], ts_lun['Name']
+                print "Error ", err
             # Write end
             out_fp.write('e');
             output_offset += 1
