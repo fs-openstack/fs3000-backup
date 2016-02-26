@@ -37,8 +37,8 @@ import struct
 from nova.virt.libvirt import utils as libvirt_utils
 from nova.storage import linuxscsi
 
-HTTP_DEBUG=1
-CMD_DEBUG=1
+HTTP_DEBUG=0
+CMD_DEBUG=0
 VERSION = '00.00.01'
 GiB = 1024 * 1024 * 1024
 ENABLE_TRACE = False
