@@ -633,7 +633,7 @@ class CCFS3000Helper(object):
         if not system_info:
             msg = ('Basic system information is unavailable.')
             if (self.debug): print(msg)
-            raise exception.VolumeBackendAPIException(data=msg)
+            raise NameError(msg)
         self.storage_serial_number = system_info['serialNumber']
 
         if self.config_slave_ip:
@@ -1218,8 +1218,23 @@ class CCFS3000Helper(object):
         command = 'sudo /usr/bin/iscsiadm -m node -p %s -o delete' % target_portal
         outputs, error = self._execute(command)
 
-    def create_qcow2_snap(self, backing, to_diff):
+    def qemu_img_create(self, backing, to_diff):
         command = 'sudo /usr/bin/qemu-img create -f qcow2 -o backing_file=%s %s' % (backing, to_diff)
+        print (command)
+        outputs, error = self._execute(command)
+
+    def qemu_img_map(self, nbd_device):
+        command = 'sudo /usr/bin/qemu-img map %s' % nbd_device
+        outputs, error = self._execute(command)
+        maps = []
+        for output in outputs.splitlines():
+            words = output.split()
+            if (words[3] == nbd_device):
+                maps.append((words[0], words[1]))
+        return maps
+
+    def qemu_img_rebase(self, diff1, diff2):
+        command = 'sudo /usr/bin/qemu-img rebase -b %s %s' % (diff1, diff2)
         print (command)
         outputs, error = self._execute(command)
 
@@ -1236,16 +1251,6 @@ class CCFS3000Helper(object):
 
     def disconnect_nbd(self, nbd_dev):
         nbd_dev.unget_dev()
-
-    def qcow2_img_map(self, nbd_device):
-        command = 'sudo /usr/bin/qemu-img map %s' % nbd_device
-        outputs, error = self._execute(command)
-        maps = []
-        for output in outputs.splitlines():
-            words = output.split()
-            if (words[3] == nbd_device):
-                maps.append((words[0], words[1]))
-        return maps
 
     def _do_iscsi_discovery(self, target_ip):
         command = 'sudo /usr/bin/iscsiadm -m discovery -t st -p %s:3260' % target_ip
@@ -1597,7 +1602,7 @@ class CCFS3000Helper(object):
         self.terminate_connection(lun_data['Id'], self.connector, conn_info, dev_path)
 
     def export_qdiff(self, from_snap, lv_name, to_snap, to_diff, backing):
-        self.create_qcow2_snap(backing, to_diff)
+        self.qemu_img_create(backing, to_diff)
         nbd_dev = self.connect_nbd(to_diff)
         self.export_diff(from_snap, lv_name, to_snap, nbd_dev.device, 1)
         nbd_dev.flush_dev()
@@ -1749,7 +1754,7 @@ class CCFS3000Helper(object):
     def _import_qdiff(self, nbd_dev, dest_path, orig_lun):
         in_fp = open(nbd_dev.device, "rb");
         out_fp = open(dest_path, "wb");
-        maps = self.qcow2_img_map(nbd_dev.image)
+        maps = self.qemu_img_map(nbd_dev.image)
         # create From snapshot if need
         err, snaps = self.client.get_snaps_by_lunid(orig_lun['Id'])
         if not snaps:
@@ -1789,7 +1794,7 @@ class CCFS3000Helper(object):
             print "#####: tsnapshot %s" % snapshot
         self.create_snapshot(snapshot, tsnap, "fs3000_backup created")
 
-    def do_merge_diff(self, diff1, diff2, diff3):
+    def do_merge_rdiff(self, diff1, diff2, diff3):
         diff1_fp = open(diff1, "rb");
         diff2_fp = open(diff2, "rb");
         fsnap1, tsnap1, lv_size1, input_offset1 = self.parse_rbd_hdr(diff1_fp)
@@ -1832,13 +1837,18 @@ class CCFS3000Helper(object):
 
         return
 
+    def do_merge_qdiff(self, diff1, diff2):
+        self.qemu_img_rebase(diff1, diff2)
+
 def main():
 
     Usage = 'Usage:\n\
      # fs3000_backup.py export LV_NAME dest-path\n\
      # fs3000_backup.py import src-path LV_NAME\n\
-     # fs3000_backup.py export-qdiff from_snap1 LV_NAME@snap2 dest-path backing-path\n\
-     # fs3000_backup.py import-qdiff /path/to/diff LV_NAME\n\
+     # fs3000_backup.py export-diff from_snap1 LV_NAME@snap2 dest-path backing-path\n\
+     # fs3000_backup.py import-diff /path/to/diff LV_NAME\n\
+     # fs3000_backup.py merge-diff 1st-diff-path 2nd-diff-path\n\
+     # Note: the diffs between 1st-diff and 2nd-diff will be merged to 2nd-diff\n\
     '
 
 
@@ -1881,7 +1891,7 @@ def main():
 
         helper.import_rdiff(backup_file, lv_name)
 
-    elif (sys.argv[1] == 'export-qdiff'):
+    elif (sys.argv[1] == 'export-diff'):
         if (len(sys.argv) != 6):
             print Usage
             return
@@ -1894,7 +1904,7 @@ def main():
 
         helper.export_qdiff(from_snap, lv_name, to_snap, to_diff, backing)
 
-    elif (sys.argv[1] == 'import-qdiff'):
+    elif (sys.argv[1] == 'import-diff'):
         if (len(sys.argv) != 4):
             print Usage
             return
@@ -1904,14 +1914,13 @@ def main():
         helper.import_qdiff(backup_file, lv_name)
 
     elif (sys.argv[1] == 'merge-diff'):
-        if (len(sys.argv) != 5):
+        if (len(sys.argv) != 4):
             print Usage
             return
         first_diff = sys.argv[2]
         second_diff = sys.argv[3]
-        merged_diff = sys.argv[4]
 
-        helper.do_merge_diff(first_diff, second_diff, merged_diff)
+        helper.do_merge_qdiff(first_diff, second_diff)
 
     elif (sys.argv[1] == 'ls'):
         helper.do_ls()
