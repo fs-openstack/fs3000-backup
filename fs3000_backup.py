@@ -1788,11 +1788,8 @@ class CCFS3000Helper(object):
     def _import_qdiff(self, nbd_dev, dest_path, orig_lun):
         in_fp = open(nbd_dev.device, "rb");
         out_fp = open(dest_path, "wb");
-<<<<<<< HEAD
         if (CMD_DEBUG == 1):
             print "in_fp %s, out_fp %s" % (nbd_dev.device, dest_path)
-=======
->>>>>>> 50df190ecc16bbb3a4b37c29cbab3fb671b96ee5
         maps = self.qemu_img_map(nbd_dev.image)
         # create From snapshot if need
         #err, snaps = self.client.get_snaps_by_lunid(orig_lun['Id'])
@@ -1822,7 +1819,6 @@ class CCFS3000Helper(object):
         in_fp.close()
         out_fp.close()
 
-<<<<<<< HEAD
         # always create To snapshot after import diff after at least 1s
         #time.sleep(1)
         #tsnap = strftime("%Y%m%d_%H%M%S", gmtime())
@@ -1836,34 +1832,7 @@ class CCFS3000Helper(object):
         #if (CMD_DEBUG == 1):
         #    print "#####: tsnapshot %s" % snapshot
         #self.create_snapshot(snapshot, tsnap, "fs3000_backup created")
-=======
-        # always create To snapshot after import diff
-        tsnap = strftime("%Y%m%d_%H%M%S", gmtime())
-        snapshot = {'name': tsnap,
-                    'size': int(orig_lun['Size'])/GiB,
-                    'volume_name': orig_lun['Id'],
-                    'display_name': 'fs3000_backup.py created',
-                    'volume': {'provider_location': ('type^lun|system^TODO_HA|id^%s' % orig_lun['Id']),
-                               'name': orig_lun['Id'],
-                               'size': int(orig_lun['Size'])/GiB}}
-        if (CMD_DEBUG == 1):
-            print "#####: tsnapshot %s" % snapshot
-        self.create_snapshot(snapshot, tsnap, "fs3000_backup created")
->>>>>>> 50df190ecc16bbb3a4b37c29cbab3fb671b96ee5
 
-    def do_merge_rdiff(self, diff1, diff2, diff3):
-        diff1_fp = open(diff1, "rb");
-        diff2_fp = open(diff2, "rb");
-        fsnap1, tsnap1, lv_size1, input_offset1 = self.parse_rbd_hdr(diff1_fp)
-        fsnap2, tsnap2, lv_size2, input_offset2 = self.parse_rbd_hdr(diff2_fp)
-        if (CMD_DEBUG == 1):
-            print "diff1 ", (fsnap1, tsnap1, lv_size1, input_offset1)
-            print "diff2 ", (fsnap2, tsnap2, lv_size2, input_offset2)
-
-        # Sanity Check
-        if (tsnap1 != fsnap2):
-            raise NameError("The first TO snapshot must be equal with the" \
-                            " second FROM snapshot, aborting")
         diff1_map = {}
         diff2_map = {}
         while 1:
