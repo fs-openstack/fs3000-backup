@@ -328,6 +328,12 @@ class CCFS3000RESTClient(object):
                          'to' : to_snap}
         return self.request(url_parameter)
 
+    def get_thin_dump(self, lun_id):
+        url_parameter = {'service' : 'LvService',
+                         'action' : 'thinDump',
+                         'lvId' : lun_id}
+        return self.request(url_parameter)
+
     def get_lun_by_name(self, name):
         err, luns = self.get_all_type_of_luns()
         if not err:
@@ -602,16 +608,6 @@ class CCFS3000Helper(object):
         self.storage_username = STORAGE_USERNAME
         self.storage_password = STORAGE_PASSWORD
         self.debug = debug
-        if (len(libvirt_utils.get_fc_wwpns()) == 0):
-            raise NameError("Error, plz check FC link")
-        wwpn = []
-        wwpn.append(libvirt_utils.get_fc_wwpns().pop().upper())
-        iscsi_initiator = []
-        iscsi_initiator.append(libvirt_utils.get_iscsi_initiator())
-        self.connector = {'initiator': iscsi_initiator,
-                          'wwpns': wwpn}
-        if (CMD_DEBUG >= 2):
-            print "connector, ", self.connector
         #self.max_over_subscription_ratio = (
         #    self.configuration.max_over_subscription_ratio)
         # self.lookup_service_instance = None
@@ -1186,17 +1182,27 @@ class CCFS3000Helper(object):
        	     self.rescan_host()
         time.sleep(1)
 
-    def initialize_connection(self, lun_id, connector):
+    def initialize_connection(self, lun_id):
+        if (len(libvirt_utils.get_fc_wwpns()) == 0):
+            raise NameError("Error, plz check FC link")
+        wwpn = []
+        wwpn.append(libvirt_utils.get_fc_wwpns().pop().upper())
+        iscsi_initiator = []
+        iscsi_initiator.append(libvirt_utils.get_iscsi_initiator())
+        self.connector = {'initiator': iscsi_initiator,
+                          'wwpns': wwpn}
+        if (CMD_DEBUG >= 2):
+            print "connector, ", self.connector
         err, lun_data = self.client.get_lun_by_id(lun_id)
         if (self.storage_protocol == 'iSCSI'):
-            host_id = connector['initiator']
+            host_id = self.connector['initiator']
         elif (self.storage_protocol == 'FC'):
-            host_id = connector['wwpns']
+            host_id = self.connector['wwpns']
         self.expose_lun(lun_data, host_id)
         conn_info = self.get_connection_info(
-                                        connector,
+                                        self.connector,
                                         lun_data['Id'],
-                                        connector['initiator'])
+                                        self.connector['initiator'])
         self.attach_volume(conn_info)
        	return conn_info
 
@@ -1218,8 +1224,38 @@ class CCFS3000Helper(object):
         command = 'sudo /usr/bin/iscsiadm -m node -p %s -o delete' % target_portal
         outputs, error = self._execute(command)
 
-    def qemu_img_create(self, backing, to_diff):
-        command = 'sudo /usr/bin/qemu-img create -f qcow2 -o backing_file=%s %s' % (backing, to_diff)
+    def qemu_img_create(self, backing, to_diff, size):
+        if (backing == ""):
+            command = 'sudo /usr/bin/qemu-img create -f qcow2 %s %s' % (to_diff, size)
+        else:
+            command = 'sudo /usr/bin/qemu-img create -f qcow2 -o backing_file=%s %s' % (backing, to_diff)
+        print (command)
+        outputs, error = self._execute(command)
+
+    def qemu_img_create_snap(self, to_diff, snap=None):
+        if (snap == None):
+            command = 'sudo /usr/bin/qemu-img snapshot -c InitSnap %s' % to_diff
+        else:
+            command = 'sudo /usr/bin/qemu-img snapshot -c %s %s' % (snap, to_diff)
+        print (command)
+        outputs, error = self._execute(command)
+
+    def qemu_img_get_snap(self, to_diff, snapid):
+        command = 'sudo /usr/bin/qemu-img snapshot -l %s' % to_diff
+        outputs, error = self._execute(command)
+        for output in outputs.splitlines():
+            words = output.split()
+            if (words[0] == str(snapid)):
+                return words[1]
+        return ""
+
+    def qemu_img_rollback_to_init(self, to_diff):
+        command = 'sudo /usr/bin/qemu-img snapshot -a InitSnap %s' % to_diff
+        print (command)
+        outputs, error = self._execute(command)
+
+    def qemu_img_delete_snap(self, to_diff, snap):
+        command = 'sudo /usr/bin/qemu-img snapshot -d %s %s' % (to_diff, snap)
         print (command)
         outputs, error = self._execute(command)
 
@@ -1237,6 +1273,15 @@ class CCFS3000Helper(object):
         command = 'sudo /usr/bin/qemu-img rebase -b %s %s' % (diff1, diff2)
         print (command)
         outputs, error = self._execute(command)
+
+    def qemu_img_get_size(self, to_diff):
+        command = 'sudo /usr/bin/qemu-img info %s' % to_diff
+        print (command)
+        outputs, error = self._execute(command)
+        for output in outputs.splitlines():
+            words = output.split(':')
+            if (words[0] == 'virtual size'):
+                return words[1].split('(')[1].split()[0]
 
     def connect_nbd(self, to_diff):
         command = '/sbin/modprobe nbd max_part=16'
@@ -1404,7 +1449,7 @@ class CCFS3000Helper(object):
                     re.match(lv_name, lun['Name'])):
                     return lun
 
-            raise NameError("There's no volume named", lv_name)
+            return None
 
     def do_lvs(self):
         err, luns = self.client.get_luns()
@@ -1425,13 +1470,18 @@ class CCFS3000Helper(object):
     def do_det(self, lv_name):
         lun_data = self.do_ls(lv_name)
         lun_id = lun_data['Id']
-        conn_info = self.initialize_connection(lun_id, self.connector)
+        conn_info = self.initialize_connection(lun_id)
         dev_path, acsl = self.get_path_and_acsl_by_lunid(
                 lun_id, conn_info, PROTOCOL, self.connector)
         self.terminate_connection(lun_id, self.connector,
                 conn_info, dev_path)
         command = 'for i in /dev/nbd*; do qemu-nbd -d $i; done'
         outputs, error = self._execute(command)
+
+    def do_vgs(self):
+        managed_pools = self.client.get_pools()
+        for po in managed_pools:
+            print(po['Name'], int(po['Free']))
 
     def _dd_data(self, src_dev, dest_file):
         command = 'sudo /bin/dd if=%s of=%s bs=1M oflag=dsync 2>/dev/null' % (src_dev, dest_file)
@@ -1455,7 +1505,7 @@ class CCFS3000Helper(object):
     def export_vol(self, lv_name, backup_path):
         lun_data = self.do_ls(lv_name)
         lun_id = lun_data['Id']
-        conn_info = helper.initialize_connection(lun_id, self.connector)
+        conn_info = helper.initialize_connection(lun_id)
         dev_path, acsl = self.get_path_and_acsl_by_lunid(lun_id, conn_info, PROTOCOL, self.connector)
         if (CMD_DEBUG == 1):
             print ('******* Got %s dev_path %s, acsl %s' % (lv_name, dev_path, acsl))
@@ -1465,7 +1515,7 @@ class CCFS3000Helper(object):
     def import_vol(self, backup_path, lv_name):
         lun_data = self.do_ls(lv_name)
         lun_id = lun_data['Id']
-        conn_info = helper.initialize_connection(lun_id, self.connector)
+        conn_info = helper.initialize_connection(lun_id)
         dev_path, acsl = self.get_path_and_acsl_by_lunid(lun_id, conn_info, PROTOCOL, self.connector)
         if (CMD_DEBUG == 1):
             print ('******* Got %s dev_path %s, acsl %s' % (lv_name, dev_path, acsl))
@@ -1474,11 +1524,14 @@ class CCFS3000Helper(object):
 
     def export_diff(self, from_snap, lv_name, to_snap, to_diff, to_nbd):
         lun_data = self.do_ls(lv_name)
-        lun_data1 = self.do_ls(from_snap)
-        lun_data2 = self.do_ls(to_snap)
+        if (from_snap == ""):
+            lun_data1 = ""
+        else:
+            lun_data1 = self.do_ls(from_snap)
 
+        lun_data2 = self.do_ls(to_snap)
         lun_id = lun_data2['Id']
-        conn_info = helper.initialize_connection(lun_id, self.connector)
+        conn_info = helper.initialize_connection(lun_id)
         dev_path, acsl = self.get_path_and_acsl_by_lunid(lun_id, conn_info, PROTOCOL, self.connector)
         if (CMD_DEBUG == 1):
             print ('******* Got %s dev_path %s, acsl %s' % (to_snap, dev_path, acsl))
@@ -1488,7 +1541,7 @@ class CCFS3000Helper(object):
             self._export_qdiff(dev_path, to_diff, lun_data1, lun_data2, lun_data)
         self.terminate_connection(lun_id, self.connector, conn_info, dev_path)
 
-    def _export_rdiff(self, src_path, to_diff, fs_lun, ts_lun, orig_lun):
+    def _export_rdiff(self, src_path, to_diff, fs_lun, ts_lun):
         input_offset = 0;
         output_offset = 0;
         in_fp = open(src_path, "rb");
@@ -1592,8 +1645,13 @@ class CCFS3000Helper(object):
         if (CMD_DEBUG == 1):
             print ("#####: infp %s, outfp %s" % (src_path, to_diff))
 
-        # Write diff data
-        err, diff_map = self.client.get_thin_dump_diff(fs_lun['Id'], ts_lun['Id'])
+        # get ts_lun all mapping data
+        if (fs_lun == ""):
+            err, diff_map = self.client.get_thin_dump(ts_lun['Id'])
+        # get diff data
+        else:
+            err, diff_map = self.client.get_thin_dump_diff(fs_lun['Id'], ts_lun['Id'])
+
         if (diff_map is None):
             if (CMD_DEBUG == 1):
                 print "There's no diff between", fs_lun['Name'], ts_lun['Name']
@@ -1608,13 +1666,15 @@ class CCFS3000Helper(object):
         for map in diff_map:
             bs =  map['chunksize']
             start =  map['start'] * bs
-            length =  map['length'] * bs
+            length =  map['length']
             if (CMD_DEBUG == 1):
                 print 'start %s, len %s, bs %s' % (map['start'], map['length'], map['chunksize'])
-
-            in_fp.seek(start)
-            out_fp.seek(start)
-            out_fp.write(in_fp.read(length));
+            while (length):
+                in_fp.seek(start)
+                out_fp.seek(start)
+                out_fp.write(in_fp.read(bs));
+                start += bs
+                length -= 1
 
         in_fp.close()
         out_fp.close()
@@ -1626,7 +1686,7 @@ class CCFS3000Helper(object):
              print ("[Error] There is no %s" % lv_name)
              return
 
-        conn_info = self.initialize_connection(lun_data['Id'], self.connector)
+        conn_info = self.initialize_connection(lun_data['Id'])
         dev_path, acsl = self.get_path_and_acsl_by_lunid(
              lun_data['Id'], conn_info, PROTOCOL, self.connector)
         if (CMD_DEBUG == 1):
@@ -1635,30 +1695,61 @@ class CCFS3000Helper(object):
         self.terminate_connection(lun_data['Id'], self.connector, conn_info, dev_path)
 
     def export_qdiff(self, from_snap, lv_name, to_snap, to_diff, backing):
-        self.qemu_img_create(backing, to_diff)
+        lun_data = self.do_ls(lv_name)
+        self.qemu_img_create(backing, to_diff, lun_data['Size'])
         nbd_dev = self.connect_nbd(to_diff)
+        if (CMD_DEBUG == 1):
+            print ('#####: write to ', nbd_dev.device)
         self.export_diff(from_snap, lv_name, to_snap, nbd_dev.device, 1)
+        if (CMD_DEBUG == 1):
+            print ('#####: flushing ', nbd_dev.device)
         nbd_dev.flush_dev()
+        if (CMD_DEBUG == 1):
+            print ('#####: disconnect ', nbd_dev.device)
         self.disconnect_nbd(nbd_dev)
-        pass
+        self.qemu_img_create_snap(to_diff)
+        if (from_snap != "" and to_snap != ""):
+            self.qemu_img_create_snap(to_diff, from_snap)
+            self.qemu_img_create_snap(to_diff, to_snap)
+
+    def get_pool(self, size):
+        managed_pools = self.client.get_pools()
+        for po in managed_pools:
+            if(int(po['Free']) > int(size)):
+                return po['Id']
 
     def import_qdiff(self, backup, lv_name):
+        # create lv_name if not exist
         lun_data = self.do_ls(lv_name)
         if (lun_data is None):
-             print ("[Error] There is no %s found in fs3000" % lv_name)
-             return
+            lv_vsize = self.qemu_img_get_size(backup)
+            pool_id = self.get_pool(lv_vsize)
+            err, resp = self.client.create_lun(pool_id, lv_name, lv_vsize, self.lvtype)
+            if err:
+                raise exception.VolumeBackendAPIException(data=err['messages'])
+        lun_data = self.do_ls(lv_name)
+        if (lun_data is None):
+            print ("[Error] There is no %s in fs3000" % lv_name)
+            return
 
+        from_snap = self.qemu_img_get_snap(backup, 2)
+        to_snap = self.qemu_img_get_snap(backup, 3)
+        #if (from_snap != ""):
+        #    from_snap = '%s-bak' % from_snap
+        #if (to_snap != ""):
+        #    to_snap = '%s-bak' % to_snap
+        self.qemu_img_rollback_to_init(backup)
         nbd_dev = self.connect_nbd(backup)
-        conn_info = self.initialize_connection(lun_data['Id'], self.connector)
+        conn_info = self.initialize_connection(lun_data['Id'])
         dev_path, acsl = self.get_path_and_acsl_by_lunid(
              lun_data['Id'], conn_info, PROTOCOL, self.connector)
         if (CMD_DEBUG == 1):
             print ('******* Got %s dev_path %s, acsl %s' % (lv_name, dev_path, acsl))
-        self._import_qdiff(nbd_dev, dev_path, lun_data)
-        self._flush_block(dev_path)
-        nbd_dev.flush_dev()
+        self._import_qdiff(nbd_dev, dev_path, lun_data, from_snap, to_snap)
         self.disconnect_nbd(nbd_dev)
         self.terminate_connection(lun_data['Id'], self.connector, conn_info, dev_path)
+        #self.qemu_img_delete_snap(backup, from_snap)
+        #self.qemu_img_delete_snap(backup, to_snap)
 
     def parse_rbd_meta(self, in_fp, input_offset):
         # Read LV size starting tag 'w'
@@ -1785,33 +1876,31 @@ class CCFS3000Helper(object):
                 print "#####: tsnapshot %s" % snapshot
             self.create_snapshot(snapshot, tsnap, "fs3000_backup created")
 
-    def _import_qdiff(self, nbd_dev, dest_path, orig_lun):
+    def _import_qdiff(self, nbd_dev, dest_path, orig_lun, from_snap, to_snap):
         in_fp = open(nbd_dev.device, "rb");
         out_fp = open(dest_path, "wb");
         if (CMD_DEBUG == 1):
-            print "in_fp %s, out_fp %s" % (nbd_dev.device, dest_path)
+            print "in_fp %s, out_fp %s, %s %s" % (nbd_dev.device, dest_path, from_snap, to_snap)
         maps = self.qemu_img_map(nbd_dev.image)
-        # create From snapshot if need
-        #err, snaps = self.client.get_snaps_by_lunid(orig_lun['Id'])
-        #if not snaps:
-        #    fsnap = strftime("%Y%m%d_%H%M%S", gmtime())
-        #    snapshot = {'name': fsnap,
-        #                'size': int(orig_lun['Size'])/GiB,
-        #                'volume_name': orig_lun['Id'],
-        #                'display_name': 'fs3000_backup.py created',
-        #                'volume': {'provider_location': ('type^lun|system^TODO_HA|id^%s' % orig_lun['Id']),
-        #                           'name': orig_lun['Id'],
-        #                           'size': int(orig_lun['Size'])/GiB}}
-        #    if (CMD_DEBUG == 1):
-        #        print "#####: fsnapshot %s" % snapshot
-        #    self.create_snapshot(snapshot, fsnap, "fs3000_backup created")
+
+        # create From snapshot
+        err, snaps = self.client.get_snaps_by_lunid(orig_lun['Id'])
+        if not snaps and from_snap != "":
+            snapshot = {'name': from_snap,
+                        'size': int(orig_lun['Size'])/GiB,
+                        'volume_name': orig_lun['Id'],
+                        'display_name': 'fs3000_backup.py created',
+                        'volume': {'provider_location': ('type^lun|system^TODO_HA|id^%s' % orig_lun['Id']),
+                                   'name': orig_lun['Id'],
+                                   'size': int(orig_lun['Size'])/GiB}}
+            if (CMD_DEBUG == 1):
+                print "#####: fsnapshot %s" % snapshot
+            self.create_snapshot(snapshot, from_snap, "fs3000_backup created")
 
         for map in maps:
             (start, length) = map
             start = int(start, 16)
             length = int(length, 16)
-            if (CMD_DEBUG == 1):
-                print "#####: map: ", map, start, length
             in_fp.seek(start)
             out_fp.seek(start)
             out_fp.write(in_fp.read(length))
@@ -1819,47 +1908,22 @@ class CCFS3000Helper(object):
         in_fp.close()
         out_fp.close()
 
-        # always create To snapshot after import diff after at least 1s
-        #time.sleep(1)
-        #tsnap = strftime("%Y%m%d_%H%M%S", gmtime())
-        #snapshot = {'name': tsnap,
-        #            'size': int(orig_lun['Size'])/GiB,
-        #            'volume_name': orig_lun['Id'],
-        #            'display_name': 'fs3000_backup.py created',
-        #            'volume': {'provider_location': ('type^lun|system^TODO_HA|id^%s' % orig_lun['Id']),
-        #                       'name': orig_lun['Id'],
-        #                       'size': int(orig_lun['Size'])/GiB}}
-        #if (CMD_DEBUG == 1):
-        #    print "#####: tsnapshot %s" % snapshot
-        #self.create_snapshot(snapshot, tsnap, "fs3000_backup created")
+        if (CMD_DEBUG == 1):
+            print ('******* flush block ', dest_path)
+        self._flush_block(dest_path)
 
-        diff1_map = {}
-        diff2_map = {}
-        while 1:
-            # Read LV size starting tag 'w'
-            input_buffer = in_fp.read(1);
-            input_offset += 1
-            in_fp.seek(input_offset)
-            if (input_buffer != 'w'):
-                break
-
-            input_buffer = in_fp.read(16)
-            if (len(input_buffer) != 16):
-                break
-            start, length = struct.unpack('<QQ', input_buffer)
-            if length == 0:
-                break
-            input_offset += 16
-            in_fp.seek(input_offset)
-
-            out_fp.seek(start)
-            out_fp.write(in_fp.read(length));
-
-            input_offset += length
-            in_fp.seek(input_offset)
-
+        # always create To snapshot after import diff after 1s
+        if to_snap != "":
+            snapshot = {'name': to_snap,
+                        'size': int(orig_lun['Size'])/GiB,
+                        'volume_name': orig_lun['Id'],
+                        'display_name': 'fs3000_backup.py created',
+                        'volume': {'provider_location': ('type^lun|system^TODO_HA|id^%s' % orig_lun['Id']),
+                                   'name': orig_lun['Id'],
+                                   'size': int(orig_lun['Size'])/GiB}}
             if (CMD_DEBUG == 1):
-                print ("#####: start %s len %s" % (start, length))
+                print "#####: tsnapshot %s" % snapshot
+            self.create_snapshot(snapshot, to_snap, "fs3000_backup created")
 
         return
 
@@ -1872,9 +1936,11 @@ def main():
      # fs3000_backup.py export LV_NAME dest-path\n\
      # fs3000_backup.py import src-path LV_NAME\n\
      # fs3000_backup.py export-diff from_snap1 LV_NAME@snap2 dest-path backing-path\n\
-     # fs3000_backup.py import-diff /path/to/diff LV_NAME\n\
+     # fs3000_backup.py export-diff LV_NAME@snap1 dest-path\n\
+     # fs3000_backup.py import-diff src-path LV_NAME\n\
      # fs3000_backup.py merge-diff 1st-diff-path 2nd-diff-path\n\
      # Note: the diffs between 1st-diff and 2nd-diff will be merged to 2nd-diff\n\
+     # For more information about merge-diff, refer qemu-img rebase\n\
     '
 
 
@@ -1882,9 +1948,9 @@ def main():
         if (len(sys.argv) != 4):
             print Usage
             return
+
         lv_name = sys.argv[2]
         backup_path = sys.argv[3]
-
         helper.export_vol(lv_name, backup_path)
 
     elif (sys.argv[1] == 'import'):
@@ -1894,7 +1960,8 @@ def main():
         backup_path = sys.argv[2]
         lv_name = sys.argv[3]
 
-        helper.import_vol(backup_path, lv_name)
+        helper.import_qdiff(backup_path, lv_name)
+        #helper.import_qdiff(src_path, lv_name)
 
     elif (sys.argv[1] == 'export-rdiff'):
         if (len(sys.argv) != 5):
@@ -1918,26 +1985,32 @@ def main():
         helper.import_rdiff(backup_file, lv_name)
 
     elif (sys.argv[1] == 'export-diff'):
-        if (len(sys.argv) != 6):
+        if (len(sys.argv) == 4):
+            word = sys.argv[2].split("@")
+            lv_name = word[0]
+            to_snap = word[1]
+            to_diff = sys.argv[3]
+            helper.export_qdiff("", lv_name, to_snap, to_diff, "")
+        elif (len(sys.argv) == 6):
+            from_snap = sys.argv[2]
+            word = sys.argv[3].split("@")
+            lv_name = word[0]
+            to_snap = word[1]
+            to_diff = sys.argv[4]
+            backing = sys.argv[5]
+            helper.export_qdiff(from_snap, lv_name, to_snap, to_diff, backing)
+        else:
             print Usage
             return
-        from_snap = sys.argv[2]
-        word = sys.argv[3].split("@")
-        lv_name = word[0]
-        to_snap = word[1]
-        to_diff = sys.argv[4]
-        backing = sys.argv[5]
-
-        helper.export_qdiff(from_snap, lv_name, to_snap, to_diff, backing)
 
     elif (sys.argv[1] == 'import-diff'):
         if (len(sys.argv) != 4):
             print Usage
             return
-        backup_file = sys.argv[2]
+        src_path = sys.argv[2]
         lv_name = sys.argv[3]
 
-        helper.import_qdiff(backup_file, lv_name)
+        helper.import_qdiff(src_path, lv_name)
 
     elif (sys.argv[1] == 'merge-diff'):
         if (len(sys.argv) != 4):
@@ -1973,6 +2046,9 @@ def main():
         if (len(sys.argv) != 3):
             return
         helper.do_det(sys.argv[2])
+
+    elif (sys.argv[1] == 'vgs'):
+        helper.do_vgs()
 
     else:
         print Usage
