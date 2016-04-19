@@ -1437,11 +1437,17 @@ class CCFS3000Helper(object):
 
     def do_ls(self, lv_name):
         err, luns = self.client.get_all_type_of_luns()
-        fs_lv_name = "%s-volume" % lv_name
         if not err:
             for lun in luns :
+                fs_lv_name = "%s-volume" % lv_name
                 if (lun['Type'] == 'thin Volume' and
-                    fs_lv_name == str(lun['Name'])):
+                    re.match(fs_lv_name, str(lun['Name']))):
+                    return lun
+
+            for lun in luns :
+                sn_lv_name = "%s-snapshot" % lv_name
+                if (lun['Type'] == 'thin Volume' and
+                    re.match(sn_lv_name, str(lun['Name']))):
                     return lun
 
             for lun in luns :
@@ -1455,7 +1461,8 @@ class CCFS3000Helper(object):
         err, luns = self.client.get_luns()
         if not err:
             for lun in luns :
-                print ('%s, %s') % (lun['Id'], lun['Name'])
+                if lun is not None:
+                    print ('%s, %s') % (lun['Id'], lun['Name'])
 
     def do_lssnap(self, lv_name):
         lun_data = self.do_ls(lv_name)
@@ -1522,19 +1529,13 @@ class CCFS3000Helper(object):
         helper._dd_data(backup_path, dev_path)
         self.terminate_connection(lun_id, self.connector, conn_info, dev_path)
 
-    def export_diff(self, from_snap, lv_name, to_snap, to_diff, to_nbd):
+    def export_diff(self, lun_data1, lv_name, lun_data2, to_diff, to_nbd):
         lun_data = self.do_ls(lv_name)
-        if (from_snap == ""):
-            lun_data1 = ""
-        else:
-            lun_data1 = self.do_ls(from_snap)
-
-        lun_data2 = self.do_ls(to_snap)
         lun_id = lun_data2['Id']
         conn_info = helper.initialize_connection(lun_id)
         dev_path, acsl = self.get_path_and_acsl_by_lunid(lun_id, conn_info, PROTOCOL, self.connector)
         if (CMD_DEBUG == 1):
-            print ('******* Got %s dev_path %s, acsl %s' % (to_snap, dev_path, acsl))
+            print ('******* Got %s dev_path %s, acsl %s' % (lun_data2['Name'], dev_path, acsl))
         if (to_nbd == 0):
             self._export_rdiff(dev_path, to_diff, lun_data1, lun_data2, lun_data)
         else:
@@ -1696,11 +1697,16 @@ class CCFS3000Helper(object):
 
     def export_qdiff(self, from_snap, lv_name, to_snap, to_diff, backing):
         lun_data = self.do_ls(lv_name)
+        if (from_snap == ""):
+            lun_data1 = ""
+        else:
+            lun_data1 = self.do_ls(from_snap)
+            lun_data2 = self.do_ls(to_snap)
         self.qemu_img_create(backing, to_diff, lun_data['Size'])
         nbd_dev = self.connect_nbd(to_diff)
         if (CMD_DEBUG == 1):
             print ('#####: write to ', nbd_dev.device)
-        self.export_diff(from_snap, lv_name, to_snap, nbd_dev.device, 1)
+        self.export_diff(lun_data1, lv_name, lun_data2, nbd_dev.device, 1)
 
         try:
              pid = os.fork()
@@ -1708,12 +1714,13 @@ class CCFS3000Helper(object):
              print 'fork erorr'
              sys.exit(1)
 
+        # child wait flush, disconnect and create snapshot finished.
         if pid == 0:
             self.disconnect_nbd(nbd_dev)
             self.qemu_img_create_snap(to_diff)
             if (from_snap != "" and to_snap != ""):
-                self.qemu_img_create_snap(to_diff, from_snap)
-                self.qemu_img_create_snap(to_diff, to_snap)
+                self.qemu_img_create_snap(to_diff, lun_data1['Name'])
+                self.qemu_img_create_snap(to_diff, lun_data2['Name'])
 
     def get_pool(self, size):
         managed_pools = self.client.get_pools()
@@ -1966,17 +1973,17 @@ def main():
         helper.import_qdiff(backup_path, lv_name)
         #helper.import_qdiff(src_path, lv_name)
 
-    elif (sys.argv[1] == 'export-rdiff'):
-        if (len(sys.argv) != 5):
-            print Usage
-            return
-        from_snap = sys.argv[2]
-        word = sys.argv[3].split("@")
-        lv_name = word[0]
-        to_snap = word[1]
-        to_diff = sys.argv[4]
+    #elif (sys.argv[1] == 'export-rdiff'):
+    #    if (len(sys.argv) != 5):
+    #        print Usage
+    #        return
+    #    from_snap = sys.argv[2]
+    #    word = sys.argv[3].split("@")
+    #    lv_name = word[0]
+    #    to_snap = word[1]
+    #    to_diff = sys.argv[4]
 
-        helper.export_diff(from_snap, lv_name, to_snap, to_diff, 0)
+    #    helper.export_diff(from_snap, lv_name, to_snap, to_diff, 0)
 
     elif (sys.argv[1] == 'import-rdiff'):
         if (len(sys.argv) != 4):
