@@ -38,6 +38,7 @@ from nova.virt.libvirt import utils as libvirt_utils
 from nova.storage import linuxscsi
 from nova.virt.disk.mount import nbd
 from time import gmtime, strftime
+import os
 
 HTTP_DEBUG=0
 CMD_DEBUG=0
@@ -625,12 +626,12 @@ class CCFS3000Helper(object):
                                          self.storage_username,
                                          self.storage_password,
                                          debug)
-        system_info = self.client.get_system_info()
-        if not system_info:
-            msg = ('Basic system information is unavailable.')
-            if (self.debug): print(msg)
-            raise NameError(msg)
-        self.storage_serial_number = system_info['serialNumber']
+        #system_info = self.client.get_system_info()
+        #if not system_info:
+        #    msg = ('Basic system information is unavailable.')
+        #    if (self.debug): print(msg)
+        #    raise NameError(msg)
+        #self.storage_serial_number = system_info['serialNumber']
 
         if self.config_slave_ip:
             self.is_update_slave_ip = False
@@ -802,7 +803,7 @@ class CCFS3000Helper(object):
             err_msg = 'can not get created LV by name %s' % name
             raise exception.VolumeBackendAPIException(data=err_msg)
 
-        pl_dict = {'system': self.storage_serial_number,
+        pl_dict = {'system': '',
                    'type': 'lun',
                    'id': lun['Id']}
         model_update = {'provider_location':
@@ -829,7 +830,7 @@ class CCFS3000Helper(object):
             err_msg = 'can not get created LV by name %s' % name
             raise exception.VolumeBackendAPIException(data=err_msg)
 
-        pl_dict = {'system': self.storage_serial_number,
+        pl_dict = {'system': '',
                    'type': 'lun',
                    'id': lun['Id']}
         model_update = {'provider_location':
@@ -930,7 +931,7 @@ class CCFS3000Helper(object):
             err_msg = 'can not get snapshot %(name)s by lun_id %(lun_id)s' % {'name': name, 'lun_id': lun_id}
             raise exception.VolumeBackendAPIException(data=err_msg)
 
-        pl_dict = {'system': self.storage_serial_number,
+        pl_dict = {'system': '',
                    'type': 'snap',
                    'id': snap['Id']}
         model_update = {'provider_location':
@@ -1237,7 +1238,6 @@ class CCFS3000Helper(object):
             command = 'sudo /usr/bin/qemu-img snapshot -c InitSnap %s' % to_diff
         else:
             command = 'sudo /usr/bin/qemu-img snapshot -c %s %s' % (snap, to_diff)
-        print (command)
         outputs, error = self._execute(command)
 
     def qemu_img_get_snap(self, to_diff, snapid):
@@ -1441,12 +1441,12 @@ class CCFS3000Helper(object):
         if not err:
             for lun in luns :
                 if (lun['Type'] == 'thin Volume' and
-                    re.match(fs_lv_name, lun['Name'])):
+                    fs_lv_name == str(lun['Name'])):
                     return lun
 
             for lun in luns :
                 if (lun['Type'] == 'thin Volume' and
-                    re.match(lv_name, lun['Name'])):
+                    lv_name == str(lun['Name'])):
                     return lun
 
             return None
@@ -1701,16 +1701,19 @@ class CCFS3000Helper(object):
         if (CMD_DEBUG == 1):
             print ('#####: write to ', nbd_dev.device)
         self.export_diff(from_snap, lv_name, to_snap, nbd_dev.device, 1)
-        if (CMD_DEBUG == 1):
-            print ('#####: flushing ', nbd_dev.device)
-        nbd_dev.flush_dev()
-        if (CMD_DEBUG == 1):
-            print ('#####: disconnect ', nbd_dev.device)
-        self.disconnect_nbd(nbd_dev)
-        self.qemu_img_create_snap(to_diff)
-        if (from_snap != "" and to_snap != ""):
-            self.qemu_img_create_snap(to_diff, from_snap)
-            self.qemu_img_create_snap(to_diff, to_snap)
+
+        try:
+             pid = os.fork()
+        except OSError, e:
+             print 'fork erorr'
+             sys.exit(1)
+
+        if pid == 0:
+            self.disconnect_nbd(nbd_dev)
+            self.qemu_img_create_snap(to_diff)
+            if (from_snap != "" and to_snap != ""):
+                self.qemu_img_create_snap(to_diff, from_snap)
+                self.qemu_img_create_snap(to_diff, to_snap)
 
     def get_pool(self, size):
         managed_pools = self.client.get_pools()
