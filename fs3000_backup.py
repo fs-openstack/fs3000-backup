@@ -1701,7 +1701,7 @@ class CCFS3000Helper(object):
             lun_data1 = ""
         else:
             lun_data1 = self.do_ls(from_snap)
-            lun_data2 = self.do_ls(to_snap)
+        lun_data2 = self.do_ls(to_snap)
         self.qemu_img_create(backing, to_diff, lun_data['Size'])
         nbd_dev = self.connect_nbd(to_diff)
         if (CMD_DEBUG == 1):
