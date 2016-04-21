@@ -1746,7 +1746,7 @@ class CCFS3000Helper(object):
         if (lun_data is None):
             lv_vsize = self.qemu_img_get_size(backup)
             pool_id = self.get_pool(lv_vsize)
-            err, resp = self.client.create_lun(pool_id, lv_name, lv_vsize, self.lvtype)
+            err, resp = self.client.create_lun(pool_id, lv_name, int(lv_vsize)/GiB, self.lvtype)
             if err:
                 raise exception.VolumeBackendAPIException(data=err['messages'])
         lun_data = self.do_ls(lv_name)
