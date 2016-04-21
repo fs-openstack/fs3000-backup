@@ -492,10 +492,10 @@ class CCFS3000RESTClient(object):
         return err, resp
 
     def hide_lun(self, lun_id, host_id, protocol):
-        if (CMD_DEBUG == 1):
-            print("hide_lun lun_id %s, host_id %s, proto %s" %
-                (lun_id, host_id, protocol))
         host_lun = self.get_host_lun_by_ends(host_id, lun_id, protocol)
+        if (CMD_DEBUG == 1):
+            print("hide_lun host_lun %s, lun_id %s, host_id %s, proto %s" %
+                (host_lun, lun_id, host_id, protocol))
         if protocol == 'FC':
             url_para = {'service' : 'FCLunMappingService',
                         'action' : 'deleteFCLunMapping',
@@ -1255,8 +1255,7 @@ class CCFS3000Helper(object):
         outputs, error = self._execute(command)
 
     def qemu_img_delete_snap(self, to_diff, snap):
-        command = 'sudo /usr/bin/qemu-img snapshot -d %s %s' % (to_diff, snap)
-        print (command)
+        command = 'sudo /usr/bin/qemu-img snapshot -d %s %s' % (snap, to_diff)
         outputs, error = self._execute(command)
 
     def qemu_img_map(self, nbd_device):
@@ -1533,13 +1532,18 @@ class CCFS3000Helper(object):
         lun_data = self.do_ls(lv_name)
         lun_id = lun_data2['Id']
         conn_info = helper.initialize_connection(lun_id)
-        dev_path, acsl = self.get_path_and_acsl_by_lunid(lun_id, conn_info, PROTOCOL, self.connector)
-        if (CMD_DEBUG == 1):
-            print ('******* Got %s dev_path %s, acsl %s' % (lun_data2['Name'], dev_path, acsl))
-        if (to_nbd == 0):
-            self._export_rdiff(dev_path, to_diff, lun_data1, lun_data2, lun_data)
-        else:
-            self._export_qdiff(dev_path, to_diff, lun_data1, lun_data2, lun_data)
+        try:
+            dev_path, acsl = self.get_path_and_acsl_by_lunid(lun_id, conn_info, PROTOCOL, self.connector)
+            if (CMD_DEBUG == 1):
+                print ('Got %s dev_path %s, acsl %s' % (lun_data2['Name'], dev_path, acsl))
+            if (to_nbd == 0):
+                self._export_rdiff(dev_path, to_diff, lun_data1, lun_data2, lun_data)
+            else:
+                self._export_qdiff(dev_path, to_diff, lun_data1, lun_data2, lun_data)
+        except:
+            print ('[Error] _export_diff exception, terminate conn %s' % conn_info)
+            self.terminate_connection(lun_id, self.connector, conn_info, dev_path)
+
         self.terminate_connection(lun_id, self.connector, conn_info, dev_path)
 
     def _export_rdiff(self, src_path, to_diff, fs_lun, ts_lun):
@@ -1644,7 +1648,7 @@ class CCFS3000Helper(object):
         in_fp = open(src_path, "rb");
         out_fp = open(to_diff, "wb");
         if (CMD_DEBUG == 1):
-            print ("#####: infp %s, outfp %s" % (src_path, to_diff))
+            print ("infp %s, outfp %s" % (src_path, to_diff))
 
         # get ts_lun all mapping data
         if (fs_lun == ""):
@@ -1653,21 +1657,23 @@ class CCFS3000Helper(object):
         else:
             err, diff_map = self.client.get_thin_dump_diff(fs_lun['Id'], ts_lun['Id'])
 
+        diff_map = diff_map['code']
+
         if (diff_map is None):
             if (CMD_DEBUG == 1):
                 print "There's no diff between", fs_lun['Name'], ts_lun['Name']
-                print "Error ", err
 
+            print ('exported 0 bytes')
             in_fp.close()
             out_fp.close()
             return
 
-        diff_map = diff_map['code']
-
+        total = 0
         for map in diff_map:
             bs =  map['chunksize']
             start =  map['start'] * bs
             length =  map['length']
+            total += length*bs
             if (CMD_DEBUG == 1):
                 print 'start %s, len %s, bs %s' % (map['start'], map['length'], map['chunksize'])
             while (length):
@@ -1677,6 +1683,7 @@ class CCFS3000Helper(object):
                 start += bs
                 length -= 1
 
+        print ('exported % bytes' % total)
         in_fp.close()
         out_fp.close()
         return
@@ -1706,7 +1713,12 @@ class CCFS3000Helper(object):
         nbd_dev = self.connect_nbd(to_diff)
         if (CMD_DEBUG == 1):
             print ('#####: write to ', nbd_dev.device)
-        self.export_diff(lun_data1, lv_name, lun_data2, nbd_dev.device, 1)
+        try:
+            self.export_diff(lun_data1, lv_name, lun_data2, nbd_dev.device, 1)
+        except:
+            print ('export diff exception, disconnect ', nbd_dev.device)
+            self.disconnect_nbd(nbd_dev)
+            return
 
         try:
              pid = os.fork()
@@ -1751,11 +1763,18 @@ class CCFS3000Helper(object):
         self.qemu_img_rollback_to_init(backup)
         nbd_dev = self.connect_nbd(backup)
         conn_info = self.initialize_connection(lun_data['Id'])
-        dev_path, acsl = self.get_path_and_acsl_by_lunid(
-             lun_data['Id'], conn_info, PROTOCOL, self.connector)
-        if (CMD_DEBUG == 1):
-            print ('******* Got %s dev_path %s, acsl %s' % (lv_name, dev_path, acsl))
-        self._import_qdiff(nbd_dev, dev_path, lun_data, from_snap, to_snap)
+        try:
+            dev_path, acsl = self.get_path_and_acsl_by_lunid(
+                 lun_data['Id'], conn_info, PROTOCOL, self.connector)
+            if (CMD_DEBUG == 1):
+                print ('Got %s dev_path %s, acsl %s' % (lv_name, dev_path, acsl))
+            self._import_qdiff(nbd_dev, dev_path, lun_data, from_snap, to_snap)
+        except:
+            print ("[Error] _import_qdiff exception %s %s" % (lv_name, backup))
+            self.disconnect_nbd(nbd_dev)
+            self.terminate_connection(lun_data['Id'], self.connector, conn_info, dev_path)
+            return
+
         self.disconnect_nbd(nbd_dev)
         self.terminate_connection(lun_data['Id'], self.connector, conn_info, dev_path)
         #self.qemu_img_delete_snap(backup, from_snap)
@@ -1907,19 +1926,22 @@ class CCFS3000Helper(object):
                 print "#####: fsnapshot %s" % snapshot
             self.create_snapshot(snapshot, from_snap, "fs3000_backup created")
 
+        total = 0
         for map in maps:
             (start, length) = map
             start = int(start, 16)
             length = int(length, 16)
+            total += length
             in_fp.seek(start)
             out_fp.seek(start)
             out_fp.write(in_fp.read(length))
 
         in_fp.close()
         out_fp.close()
+        print ('imported % bytes' % total)
 
         if (CMD_DEBUG == 1):
-            print ('******* flush block ', dest_path)
+            print ('flush block ', dest_path)
         self._flush_block(dest_path)
 
         # always create To snapshot after import diff after 1s
@@ -1938,7 +1960,18 @@ class CCFS3000Helper(object):
         return
 
     def do_merge_qdiff(self, diff1, diff2):
+        diff1_from_snap = self.qemu_img_get_snap(diff1, 2)
+        diff1_to_snap = self.qemu_img_get_snap(diff1, 3)
+        self.qemu_img_delete_snap(diff1, diff1_from_snap)
+        self.qemu_img_delete_snap(diff1, diff1_to_snap)
+        diff2_from_snap = self.qemu_img_get_snap(diff2, 2)
+        diff2_to_snap = self.qemu_img_get_snap(diff2, 3)
+        self.qemu_img_delete_snap(diff2, diff2_from_snap)
+        self.qemu_img_delete_snap(diff2, diff2_to_snap)
+
         self.qemu_img_rebase(diff1, diff2)
+        self.qemu_img_create_snap(diff2, diff1_from_snap)
+        self.qemu_img_create_snap(diff2, diff2_to_snap)
 
 def main():
 
@@ -1971,7 +2004,6 @@ def main():
         lv_name = sys.argv[3]
 
         helper.import_qdiff(backup_path, lv_name)
-        #helper.import_qdiff(src_path, lv_name)
 
     #elif (sys.argv[1] == 'export-rdiff'):
     #    if (len(sys.argv) != 5):
