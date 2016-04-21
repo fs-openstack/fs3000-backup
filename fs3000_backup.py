@@ -1683,7 +1683,7 @@ class CCFS3000Helper(object):
                 start += bs
                 length -= 1
 
-        print ('exported % bytes' % total)
+        print ('exported %s bytes' % total)
         in_fp.close()
         out_fp.close()
         return
@@ -1938,7 +1938,7 @@ class CCFS3000Helper(object):
 
         in_fp.close()
         out_fp.close()
-        print ('imported % bytes' % total)
+        print ('imported %s bytes' % total)
 
         if (CMD_DEBUG == 1):
             print ('flush block ', dest_path)
