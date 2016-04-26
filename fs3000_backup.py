@@ -1438,13 +1438,13 @@ class CCFS3000Helper(object):
         err, luns = self.client.get_all_type_of_luns()
         if not err:
             for lun in luns :
-                fs_lv_name = "%s-volume" % lv_name
+                fs_lv_name = "volume-%s" % lv_name
                 if (lun['Type'] == 'thin Volume' and
                     re.match(fs_lv_name, str(lun['Name']))):
                     return lun
 
             for lun in luns :
-                sn_lv_name = "%s-snapshot" % lv_name
+                sn_lv_name = "snapshot-%s" % lv_name
                 if (lun['Type'] == 'thin Volume' and
                     re.match(sn_lv_name, str(lun['Name']))):
                     return lun
