@@ -1602,6 +1602,7 @@ class CCFS3000Helper(object):
         if (diff_map is None):
             if (CMD_DEBUG == 1):
                 print "There's no diff between", fs_lun['Name'], ts_lun['Name']
+            if err:
                 print "Error ", err
             # Write end
             out_fp.write('e');
@@ -1973,6 +1974,18 @@ class CCFS3000Helper(object):
         self.qemu_img_create_snap(diff2, diff1_from_snap)
         self.qemu_img_create_snap(diff2, diff2_to_snap)
 
+    def do_getsize(self, lv_name):
+        lun_data = self.do_ls(lv_name)
+        err, resp = self.client.get_lun_or_snap_size(lun_data['Id'])
+        if err:
+            raise exception.VolumeBackendAPIException(data=err['messages'])
+        elif resp < 0:
+            err_msg = 'can not get volume/snapshot size by id %s err %s' % (lun_id, resp)
+            raise exception.VolumeBackendAPIException(data=err_msg)
+
+        size_gb = float(resp)/GiB
+        print '%s GiB' % size_gb
+
 def main():
 
     Usage = 'Usage:\n\
@@ -2091,6 +2104,9 @@ def main():
 
     elif (sys.argv[1] == 'vgs'):
         helper.do_vgs()
+
+    elif (sys.argv[1] == 'size'):
+        helper.do_getsize(sys.argv[2])
 
     else:
         print Usage
