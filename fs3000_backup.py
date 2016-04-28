@@ -467,6 +467,10 @@ class CCFS3000RESTClient(object):
 
     def expose_lun(self, lun_id, initiators, protocol):
         for initiator in initiators:
+            active_wwns = self.get_active_fc_wwns(str(initiator).upper())
+            if not active_wwns:
+                LOG.debug("don't expose init %s", initiator)
+                continue
             host_lun = self._get_avail_host_lun(protocol, initiator)
             if (CMD_DEBUG == 1):
                  print("expose_lun lun_id %s init %s host_lun %s" %
@@ -1346,7 +1350,7 @@ class CCFS3000Helper(object):
                             if (target in transport.upper() and
                                 str(lun_no) is str(conn_info['data']['target_lun'])):
                                 return path, acsl
-            return
+            return None, None
 
     def hide_lun(self, lun_data, host_id):
         lun_id = lun_data['Id']
@@ -1661,9 +1665,6 @@ class CCFS3000Helper(object):
         diff_map = diff_map['code']
 
         if (diff_map is None):
-            if (CMD_DEBUG == 1):
-                print "There's no diff between", fs_lun['Name'], ts_lun['Name']
-
             print ('exported 0 bytes')
             in_fp.close()
             out_fp.close()
