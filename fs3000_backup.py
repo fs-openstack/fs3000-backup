@@ -1990,11 +1990,10 @@ class CCFS3000Helper(object):
 def main():
 
     Usage = 'Usage:\n\
-     # fs3000_backup.py export LV_NAME dest-path\n\
-     # fs3000_backup.py import src-path LV_NAME\n\
-     # fs3000_backup.py export-diff from_snap1 LV_NAME@snap2 dest-path backing-path\n\
-     # fs3000_backup.py export-diff LV_NAME@snap1 dest-path\n\
-     # fs3000_backup.py import-diff src-path LV_NAME\n\
+     # fs3000_backup.py import src-path LV_UUID\n\
+     # fs3000_backup.py export-diff from_snap1_UUID LV_UUID@to_snap2_UUID dest-path backing-path\n\
+     # fs3000_backup.py export-diff LV_UUID@from_snap1_UUID dest-path\n\
+     # fs3000_backup.py import-diff src-path LV_UUID\n\
      # fs3000_backup.py merge-diff 1st-diff-path 2nd-diff-path\n\
      # Note: the diffs between 1st-diff and 2nd-diff will be merged to 2nd-diff\n\
      # For more information about merge-diff, refer qemu-img rebase\n\
